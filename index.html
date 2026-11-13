@@ -184,6 +184,7 @@ table.list tr.click:hover td{background:#f7f9fc}
       <button class="btn ghost sm admin-only" id="btnHistory">변경 이력</button>
       <button class="btn ghost sm" id="btnComments">댓글</button>
       <button class="btn ghost sm" id="btnPrint">인쇄 / PDF</button>
+      <button class="btn ghost sm" id="btnPw">비밀번호 변경</button>
       <button class="btn ghost sm" id="btnLogout">로그아웃</button>
     </div>
   </div>
@@ -336,6 +337,7 @@ function DemoStore(){
       user = { id:id.trim().toLowerCase(), uid:"demo-"+id.trim().toLowerCase(), ...r }; onUser(user);
     },
     async resetPw(){ throw new Error("데모 모드에서는 비밀번호 변경 메일을 보낼 수 없습니다."); },
+    async changePw(){ throw new Error("데모 모드에서는 비밀번호를 바꿀 수 없습니다."); },
     async logout(){ user=null; listener=null; onUser(null); },
     subscribe(cb){ listener=cb; emit(); },
     async add(o){ data.schedules.push({ id:"d"+seq++, ...o }); emit(); },
@@ -390,6 +392,13 @@ async function FirebaseStore(cfg){
       auth.languageCode = "ko";
       try{ await A.sendPasswordResetEmail(auth, email.trim()); }
       catch(e){ const c=e.code||""; if(/invalid-email|missing-email/.test(c)) throw new Error("이메일 주소 형식이 올바르지 않습니다."); if(/too-many-requests/.test(c)) throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도하세요."); throw new Error("메일 발송 오류: "+(c||e.message)); }
+    },
+    async changePw(cur, next){
+      const u = auth.currentUser; if(!u) throw new Error("다시 로그인한 뒤 시도하세요.");
+      try{ await A.reauthenticateWithCredential(u, A.EmailAuthProvider.credential(u.email, cur)); }
+      catch(e){ const c=e.code||""; if(/invalid-credential|wrong-password/.test(c)) throw new Error("현재 비밀번호가 올바르지 않습니다."); if(/too-many-requests/.test(c)) throw new Error("시도가 너무 많습니다. 잠시 후 다시 시도하세요."); throw new Error("확인 오류: "+(c||e.message)); }
+      try{ await A.updatePassword(u, next); }
+      catch(e){ const c=e.code||""; if(/weak-password/.test(c)) throw new Error("새 비밀번호가 너무 약합니다. (6자 이상)"); throw new Error("변경 오류: "+(c||e.message)); }
     },
     async logout(){ stop(); await A.signOut(auth); },
     subscribe(cb){
@@ -772,6 +781,28 @@ $("#btnHistory").onclick = openHistory;
 $("#btnComments").onclick = openComments;
 $("#btnPrint").onclick   = () => window.print();
 $("#btnLogout").onclick  = () => S.store.logout();
+$("#btnPw").onclick = () => {
+  modal(`<h3>비밀번호 변경</h3>
+    <form id="pwf" class="form" onsubmit="return false">
+      <div class="full"><label>현재 비밀번호</label><input type="password" name="cur" autocomplete="current-password"></div>
+      <div class="full"><label>새 비밀번호 (8자 이상)</label><input type="password" name="next" autocomplete="new-password"></div>
+      <div class="full"><label>새 비밀번호 확인</label><input type="password" name="next2" autocomplete="new-password"></div>
+    </form>
+    <div class="err" id="pwErr"></div>
+    <div class="mfoot"><button class="btn ghost" data-close>취소</button><button class="btn" id="pwSave">변경</button></div>`);
+  $("[data-close]").onclick = closeModal;
+  $("#pwf [name=cur]").focus();
+  $("#pwSave").onclick = async () => {
+    const f = Object.fromEntries(new FormData($("#pwf")));
+    if(!f.cur){ $("#pwErr").textContent = "현재 비밀번호를 입력하세요."; return; }
+    if(f.next.length < 8){ $("#pwErr").textContent = "새 비밀번호는 8자 이상으로 정하세요."; return; }
+    if(f.next !== f.next2){ $("#pwErr").textContent = "새 비밀번호 확인이 일치하지 않습니다."; return; }
+    if(f.next === f.cur){ $("#pwErr").textContent = "현재 비밀번호와 다른 비밀번호를 입력하세요."; return; }
+    $("#pwSave").disabled = true; $("#pwErr").textContent = "";
+    try{ await S.store.changePw(f.cur, f.next); closeModal(); alert("비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 사용하세요."); }
+    catch(e){ $("#pwErr").textContent = e.message; $("#pwSave").disabled = false; }
+  };
+};
 $("#worker").onchange    = e => { S.worker = e.target.value; };
 $("#viewList").addEventListener("click", e => {
   const r = e.target.closest("tr[data-id]"); if(!r) return;
