@@ -158,6 +158,7 @@ table.list tr.click:hover td{background:#f7f9fc}
     <input id="lpw" type="password" autocomplete="current-password" required>
     <button class="btn" type="submit" id="loginBtn">로그인</button>
     <div class="err" id="loginErr"></div>
+    <div style="text-align:right;margin-top:-4px"><a href="#" id="forgotPw" style="font-size:12px;color:var(--muted)">비밀번호 변경 / 찾기</a></div>
     <div class="demo-hint hidden" id="demoHint">
       <b>데모 모드</b> (Firebase 미연결, 데이터는 새로고침하면 초기화)<br>
       아이디 <b>team</b> = 우리팀(관리자) · <b>sud</b> = TÜV SÜD · <b>rheinland</b> = TÜV Rheinland<br>
@@ -334,6 +335,7 @@ function DemoStore(){
       if(!r) throw new Error("데모 아이디는 team / sud / rheinland 입니다.");
       user = { id:id.trim().toLowerCase(), uid:"demo-"+id.trim().toLowerCase(), ...r }; onUser(user);
     },
+    async resetPw(){ throw new Error("데모 모드에서는 비밀번호 변경 메일을 보낼 수 없습니다."); },
     async logout(){ user=null; listener=null; onUser(null); },
     subscribe(cb){ listener=cb; emit(); },
     async add(o){ data.schedules.push({ id:"d"+seq++, ...o }); emit(); },
@@ -383,6 +385,11 @@ async function FirebaseStore(cfg){
       const email = id.includes("@") ? id.trim() : `${id.trim()}@${CONFIG.LOGIN_DOMAIN}`;
       try{ await A.signInWithEmailAndPassword(auth,email,pw); }
       catch(e){ const c=e.code||""; if(/invalid-credential|wrong-password|user-not-found|invalid-email/.test(c)) throw new Error("아이디 또는 비밀번호가 올바르지 않습니다."); if(/network-request-failed/.test(c)) throw new Error("서버에 연결할 수 없습니다. 회사 네트워크(방화벽)에서 googleapis.com 접속이 막혔을 수 있습니다. ("+c+")"); if(/too-many-requests/.test(c)) throw new Error("로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요."); throw new Error("로그인 오류: "+(c||e.message)); }
+    },
+    async resetPw(email){
+      auth.languageCode = "ko";
+      try{ await A.sendPasswordResetEmail(auth, email.trim()); }
+      catch(e){ const c=e.code||""; if(/invalid-email|missing-email/.test(c)) throw new Error("이메일 주소 형식이 올바르지 않습니다."); if(/too-many-requests/.test(c)) throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도하세요."); throw new Error("메일 발송 오류: "+(c||e.message)); }
     },
     async logout(){ stop(); await A.signOut(auth); },
     subscribe(cb){
@@ -814,6 +821,16 @@ $("#loginForm").addEventListener("submit", async e => {
   catch(err){ $("#loginErr").textContent = err.message; }
   finally{ $("#loginBtn").disabled = false; }
 });
+$("#forgotPw").addEventListener("click", async e => {
+  e.preventDefault();
+  const id = $("#lid").value.trim();
+  if(!id.includes("@")){ $("#loginErr").textContent = "아이디 칸에 로그인 이메일 주소를 입력한 뒤 다시 누르세요."; $("#lid").focus(); return; }
+  if(!confirm(id+" 로 비밀번호 변경 메일을 보낼까요?")) return;
+  $("#loginErr").textContent = "";
+  try{ await S.store.resetPw(id); $("#loginErr").style.color = "var(--accent)"; $("#loginErr").textContent = "등록된 계정이면 "+id+" 로 비밀번호 변경 메일이 발송됩니다. 메일의 링크에서 새 비밀번호를 정하세요. (스팸함도 확인)"; }
+  catch(err){ $("#loginErr").style.color = ""; $("#loginErr").textContent = err.message; }
+});
+$("#lid").addEventListener("input", () => { $("#loginErr").style.color = ""; });
 
 /* =====================================================================
    8) 시작
