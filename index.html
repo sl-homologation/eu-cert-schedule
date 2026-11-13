@@ -7,7 +7,7 @@
 <style>
 :root{
   --bg:#f3f5f8; --card:#fff; --line:#d5dae2; --head:#c9d3e3; --text:#1c2330; --muted:#7c8696;
-  --sun:#e0262b; --sat:#1f5fd6; --accent:#1f4e9c; --block:#9a9ca1; --sel:rgba(31,78,156,.16); --today:#fff7d6;
+  --sun:#e0262b; --sat:#1f5fd6; --accent:#1f4e9c; --block:#5cb85c; --sel:rgba(31,78,156,.16); --today:#fff7d6;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
@@ -247,6 +247,7 @@ const CONFIG = {
     { name: "송진우", bg: "#00b0f0", fg: "#000000" },
     { name: "최서웅", bg: "#ffff00", fg: "#000000" },
     { name: "심승협", bg: "#ffc000", fg: "#000000" },
+    { name: "미정",   bg: "#d9d9d9", fg: "#000000" },
   ],
 
   // 인증기관. code 값은 Firebase users 문서의 agency 값과 같아야 합니다.
@@ -667,7 +668,7 @@ function openBlocks(){
     const rows = [...S.blocks].sort((a,b)=>a.start.localeCompare(b.start)).map(b =>
       `<tr><td>${b.start} ~ ${b.end}</td><td>${esc(b.label)}</td><td style="text-align:right"><button class="btn danger sm" data-del="${b.id}">삭제</button></td></tr>`).join("");
     modal(`<h3>휴무 / 블록 관리</h3>
-      <p class="small" style="margin-top:-6px">회사 휴무, 시험 불가 기간 등을 회색으로 표시합니다. 모든 계정에 보입니다.</p>
+      <p class="small" style="margin-top:-6px">회사 휴무, 시험 불가 기간 등을 초록색으로 표시합니다. 모든 계정에 보입니다.</p>
       <form id="bf" class="form">
         <div><label>시작일</label><input type="date" name="start" required></div>
         <div><label>종료일</label><input type="date" name="end" required></div>
@@ -851,7 +852,7 @@ function onData(d){
 }
 
 (async function start(){
-  $("#worker").innerHTML = CONFIG.OWNERS.map(o=>`<option>${esc(o.name)}</option>`).join("");
+  $("#worker").innerHTML = CONFIG.OWNERS.filter(o=>o.name!=="미정").map(o=>`<option>${esc(o.name)}</option>`).join("");
   try{
     S.store = CONFIG.FIREBASE ? await FirebaseStore(CONFIG.FIREBASE) : DemoStore();
   }catch(e){
