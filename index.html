@@ -256,6 +256,15 @@ const CONFIG = {
     { code: "ETC",       name: "기타",           prefix: "" },
   ],
 
+  // 로그인 아이디(이메일 @ 앞부분) → 작업자 이름. 로그인하면 작업자가 자동으로 본인으로 설정됩니다.
+  USER_NAMES: {
+    "jinwoo.song": "송진우",
+    "seunghyeop.shim": "심승협",
+    "seowoong.choi": "최서웅",
+    "taeseok.kim": "김태석",
+    "woochul.noh": "노우철",
+  },
+
   TYPES: ["신규", "EXT"],
   TRASH_DAYS: 7,
 };
@@ -818,6 +827,11 @@ function onUser(user, err){
   $("#whoLabel").textContent = isAdmin() ? "우리팀 (관리자)" : `${agencyOf(user.agency).name} (조회 · 댓글)`;
   document.querySelectorAll(".admin-only").forEach(el => el.classList.toggle("hidden", !isAdmin()));
   $("#workerWrap").classList.toggle("hidden", !isAdmin());
+  const myName = (CONFIG.USER_NAMES||{})[(user.id||"").toLowerCase()];
+  if(myName){
+    if(![...$("#worker").options].some(o=>o.value===myName)) $("#worker").insertAdjacentHTML("beforeend", `<option>${esc(myName)}</option>`);
+    S.worker = myName; $("#worker").value = myName;
+  }
   Object.values(S.f).forEach(s=>s.clear());
   S.schedules=[]; S.blocks=[]; S.history=[]; S.comments=[]; S.purged=false;
   render();
