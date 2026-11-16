@@ -98,6 +98,7 @@ button{cursor:pointer}
 .cmt .meta{font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
 .cmt .meta b{color:var(--text)}
 .cmt .meta button{margin-left:auto;border:0;background:none;color:var(--muted);font-size:12px;text-decoration:underline;padding:0}
+.cmt .meta button + button{margin-left:8px}
 .cmt .body{margin-top:4px;white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.5}
 .cform{display:grid;grid-template-columns:140px 1fr auto;gap:8px;margin-top:6px}
 .cform input,.cform textarea{padding:8px 10px;border:1px solid var(--line);border-radius:7px;font:inherit}
@@ -582,7 +583,7 @@ function openDetail(id){
     const cm = list.map(c => {
       const mine = isAdmin() || c.authorUid===S.user.uid;
       return `<div class="cmt ${c.authorRole==="agency"?"ext":""} ${isPriv(c)?"priv":""}"><div class="meta"><b>${esc(c.authorName)}</b><span>${stamp(c.at)}</span>
-        ${isPriv(c)?`<span class="privtag">🔒 비공개</span>`:""}${isNew(c.at)?`<span class="newtag">NEW</span>`:""}${mine?`<button data-cdel="${c.id}">삭제</button>`:""}</div>
+        ${isPriv(c)?`<span class="privtag">🔒 비공개</span>`:""}${isNew(c.at)?`<span class="newtag">NEW</span>`:""}${isAdmin()?`<button data-cvis="${c.id}" data-to="${isPriv(c)?"public":"private"}">${isPriv(c)?"공개로 전환":"🔒 비공개로 전환"}</button>`:""}${mine?`<button data-cdel="${c.id}">삭제</button>`:""}</div>
         <div class="body">${esc(c.text)}</div></div>`;
     }).join("");
     const staffName = (CONFIG.USER_NAMES||{})[(S.user.id||"").toLowerCase()];
@@ -627,6 +628,13 @@ function openDetail(id){
         draw();
       }catch(e){ $("#cErr").textContent = "등록 실패: "+e.message; $("#cSend").disabled = false; }
     };
+    document.querySelectorAll("[data-cvis]").forEach(b => b.onclick = async () => {
+      const to = b.dataset.to;
+      if(!confirm(to==="private" ? "이 댓글을 비공개로 바꿀까요? (관리자만 보게 됩니다)" : "이 댓글을 공개로 바꿀까요? (인증기관·시험팀도 보게 됩니다)")) return;
+      b.disabled = true;
+      try{ await S.store.setCommentVis(b.dataset.cvis, to); }
+      catch(e){ $("#cErr").textContent = "변경 실패: "+e.message; b.disabled = false; }
+    });
     document.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => {
       if(!confirm("댓글을 삭제할까요?")) return;
       await S.store.delComment(b.dataset.cdel);
