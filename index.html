@@ -91,6 +91,10 @@ button{cursor:pointer}
 .thread h4{margin:0 0 10px;font-size:14px}
 .cmt{padding:9px 11px;border-radius:8px;background:#f4f6f9;margin-bottom:8px}
 .cmt.ext{background:#eef5ff}
+.cmt.priv{background:#fff4e0;border:1px dashed #e0a84a}
+.privtag{display:inline-block;font-size:10.5px;line-height:15px;padding:0 5px;border-radius:3px;background:#e0a84a;color:#fff}
+.vis{display:flex;gap:12px;font-size:12.5px;margin:2px 0 6px}
+.vis label{display:flex;gap:4px;align-items:center;cursor:pointer}
 .cmt .meta{font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
 .cmt .meta b{color:var(--text)}
 .cmt .meta button{margin-left:auto;border:0;background:none;color:var(--muted);font-size:12px;text-decoration:underline;padding:0}
@@ -324,8 +328,8 @@ function DemoStore(){
   // 서버가 권한에 맞는 데이터만 내려주는 것을 흉내냅니다.
   function emit(){
     if(!listener||!user) return;
-    const sch = user.role==="admin" ? data.schedules : data.schedules.filter(s=>s.agency===user.agency && !s.deleted);
-    const cm = user.role==="admin" ? data.comments : data.comments.filter(c=>c.agency===user.agency);
+    const sch = user.role==="admin" ? data.schedules : data.schedules.filter(s=>(user.role==="staff" || s.agency===user.agency) && !s.deleted);
+    const cm = user.role==="admin" ? data.comments : data.comments.filter(c=>(c.visibility||"public")==="public" && (user.role==="staff" || c.agency===user.agency));
     listener({ schedules: sch.map(s=>({...s})), blocks: data.blocks.map(b=>({...b})), history: user.role==="admin" ? [...data.history] : [], comments: cm.map(c=>({...c})) });
   }
   return {
@@ -348,10 +352,11 @@ function DemoStore(){
     async log(h){ data.history.unshift({ id:"h"+seq++, ...h }); emit(); },
     async addComment(c){
       const s = data.schedules.find(x=>x.id===c.scheduleId);
-      if(!s || (user.role!=="admin" && s.agency!==user.agency)) throw new Error("권한이 없습니다.");
+      if(!s || (user.role==="agency" && s.agency!==user.agency)) throw new Error("권한이 없습니다.");
       data.comments.push({ id:"c"+seq++, ...c }); emit();
     },
     async delComment(id){ data.comments = data.comments.filter(x=>x.id!==id); emit(); },
+    async setCommentVis(id,v){ const c=data.comments.find(x=>x.id===id); if(c){ c.visibility=v; emit(); } },
   };
 }
 
@@ -406,12 +411,18 @@ async function FirebaseStore(cfg){
       const push = () => cb({ schedules:[...state.schedules], blocks:[...state.blocks], history:[...state.history], comments:[...state.comments] });
       const col = F.collection(db,"schedules");
       // 기관 계정은 자기 기관 + 삭제되지 않은 일정만 조회 (보안 규칙과 조건이 같아야 함)
-      const q = user.role==="admin" ? col : F.query(col, F.where("agency","==",user.agency), F.where("deleted","==",false));
+      // 시험팀(staff)은 전체 기관의 삭제되지 않은 일정
+      const q = user.role==="admin" ? col
+              : user.role==="staff" ? F.query(col, F.where("deleted","==",false))
+              : F.query(col, F.where("agency","==",user.agency), F.where("deleted","==",false));
       unsubs.push(F.onSnapshot(q, s=>{ state.schedules = s.docs.map(d=>({ id:d.id, ...d.data() })); push(); }, fail));
       unsubs.push(F.onSnapshot(F.collection(db,"blocks"), s=>{ state.blocks = s.docs.map(d=>({ id:d.id, ...d.data() })); push(); }, fail));
       // 댓글: 관리자 전체, 기관은 자기 기관 일정의 댓글만 (보안 규칙과 조건이 같아야 함)
       const cc = F.collection(db,"comments");
-      const cq = user.role==="admin" ? cc : F.query(cc, F.where("agency","==",user.agency));
+      // 비공개(private) 댓글은 관리자만 조회. 시험팀은 공개 댓글 전체, 기관은 자기 기관의 공개 댓글만
+      const cq = user.role==="admin" ? cc
+               : user.role==="staff" ? F.query(cc, F.where("visibility","==","public"))
+               : F.query(cc, F.where("agency","==",user.agency), F.where("visibility","==","public"));
       unsubs.push(F.onSnapshot(cq, s=>{ state.comments = s.docs.map(d=>({ id:d.id, ...d.data() })); push(); }, fail));
       if(user.role==="admin"){
         unsubs.push(F.onSnapshot(F.query(F.collection(db,"history"), F.orderBy("at","desc"), F.limit(300)),
@@ -426,6 +437,7 @@ async function FirebaseStore(cfg){
     log:      h      => F.addDoc(F.collection(db,"history"), h),
     addComment: c    => F.addDoc(F.collection(db,"comments"), c),
     delComment: id   => F.deleteDoc(F.doc(db,"comments",id)),
+    setCommentVis: (id,v) => F.updateDoc(F.doc(db,"comments",id), { visibility:v }),
   };
 }
 
@@ -441,6 +453,8 @@ const S = {
   worker: CONFIG.OWNERS[0].name, purged:false,
 };
 const isAdmin = () => S.user && S.user.role==="admin";
+const isStaff = () => S.user && S.user.role==="staff";
+const isPriv  = c => c.visibility==="private";
 const ownerOf = n => CONFIG.OWNERS.find(o=>o.name===n) || { name:n||"-", bg:"#cfd5de", fg:"#000" };
 const agencyOf = c => CONFIG.AGENCIES.find(a=>a.code===c) || { code:c, name:c||"-", prefix:"" };
 const barText = s => { const p=agencyOf(s.agency).prefix; return `${p?p+" : ":""}${s.project} ${s.part||""}`.trim(); };
@@ -469,7 +483,7 @@ function renderFilters(){
   const chipOn = (set,v) => !set.size || set.has(v);
   let h = `<div class="fgroup"><span>인증담당자:</span>` + CONFIG.OWNERS.map(o =>
     `<button class="chip ${chipOn(S.f.owner,o.name)?"":"off"}" data-f="owner" data-v="${esc(o.name)}" style="background:${o.bg};color:${o.fg}">${esc(o.name)}</button>`).join("") + `</div>`;
-  if(isAdmin()){
+  if(isAdmin() || isStaff()){
     h += `<div class="fgroup"><span>기관:</span>` + CONFIG.AGENCIES.map(a =>
       `<button class="chip plain ${S.f.agency.has(a.code)?"on":""} ${chipOn(S.f.agency,a.code)?"":"off"}" data-f="agency" data-v="${a.code}">${esc(a.name)}</button>`).join("") + `</div>`;
   }
@@ -567,11 +581,12 @@ function openDetail(id){
     const list = S.comments.filter(c=>c.scheduleId===id).sort((a,b)=>a.at.localeCompare(b.at));
     const cm = list.map(c => {
       const mine = isAdmin() || c.authorUid===S.user.uid;
-      return `<div class="cmt ${c.authorRole==="agency"?"ext":""}"><div class="meta"><b>${esc(c.authorName)}</b><span>${stamp(c.at)}</span>
-        ${isNew(c.at)?`<span class="newtag">NEW</span>`:""}${mine?`<button data-cdel="${c.id}">삭제</button>`:""}</div>
+      return `<div class="cmt ${c.authorRole==="agency"?"ext":""} ${isPriv(c)?"priv":""}"><div class="meta"><b>${esc(c.authorName)}</b><span>${stamp(c.at)}</span>
+        ${isPriv(c)?`<span class="privtag">🔒 비공개</span>`:""}${isNew(c.at)?`<span class="newtag">NEW</span>`:""}${mine?`<button data-cdel="${c.id}">삭제</button>`:""}</div>
         <div class="body">${esc(c.text)}</div></div>`;
     }).join("");
-    const defName = isAdmin() ? S.worker : (S.cname || loadName());
+    const staffName = (CONFIG.USER_NAMES||{})[(S.user.id||"").toLowerCase()];
+    const defName = isAdmin() ? S.worker : isStaff() ? (staffName || S.cname || loadName()) : (S.cname || loadName());
     modal(`<h3>${esc(barText(s))}</h3>
       <dl class="kv">
         <dt>기간</dt><dd>${s.start} ~ ${s.end}</dd>
@@ -583,13 +598,14 @@ function openDetail(id){
       <div class="thread">
         <h4>댓글 ${list.length}</h4>
         ${cm || `<div class="small" style="margin-bottom:8px">아직 댓글이 없습니다.</div>`}
+        ${isAdmin()?`<div class="vis"><label><input type="radio" name="cVis" value="public" checked> 공개 (인증기관·시험팀도 보임)</label><label><input type="radio" name="cVis" value="private"> 🔒 비공개 (관리자만)</label></div>`:""}
         <div class="cform">
-          <input id="cName" placeholder="이름" value="${esc(defName)}" ${isAdmin()?"readonly":""} maxlength="40">
+          <input id="cName" placeholder="이름" value="${esc(defName)}" ${isAdmin()||(isStaff()&&staffName)?"readonly":""} maxlength="40">
           <textarea id="cText" placeholder="일정 문의, 샘플 도착 등 남길 내용" maxlength="1000">${esc(keepText)}</textarea>
           <button class="btn" id="cSend">등록</button>
         </div>
         <div class="err" id="cErr"></div>
-        <div class="small">${isAdmin()?`이 일정의 댓글은 ${esc(agencyOf(s.agency).name)} 계정에도 보입니다.`:"우리 팀 담당자와 귀 기관만 볼 수 있습니다."}</div>
+        <div class="small">${isAdmin()?`공개 댓글은 ${esc(agencyOf(s.agency).name)} 계정과 시험팀에도 보입니다. 비공개 댓글은 관리자만 볼 수 있습니다.`:isStaff()?"공개 댓글은 해당 인증기관 계정에도 보입니다.":"우리 팀 담당자와 귀 기관만 볼 수 있습니다."}</div>
       </div>
       <div class="mfoot">
         <button class="btn ghost" data-close>닫기</button>
@@ -602,11 +618,12 @@ function openDetail(id){
       if(!name){ $("#cErr").textContent = "이름을 입력하세요."; return; }
       if(!text){ $("#cErr").textContent = "내용을 입력하세요."; return; }
       if(!isAdmin()){ S.cname = name; saveName(name); }
-      const authorName = isAdmin() ? `${name} (SL)` : `${agencyOf(S.user.agency).name} · ${name}`;
+      const authorName = isAdmin() ? `${name} (SL)` : isStaff() ? `${name} (SL 시험팀)` : `${agencyOf(S.user.agency).name} · ${name}`;
+      const visibility = isAdmin() && document.querySelector('input[name=cVis]:checked')?.value==="private" ? "private" : "public";
       $("#cSend").disabled = true;
       try{
         await S.store.addComment({ scheduleId:id, agency:s.agency, authorUid:S.user.uid, authorRole:S.user.role,
-          authorName, text, at:nowIso() });
+          authorName, text, visibility, at:nowIso() });
         draw();
       }catch(e){ $("#cErr").textContent = "등록 실패: "+e.message; $("#cSend").disabled = false; }
     };
@@ -624,7 +641,7 @@ function openComments(){
   const rows = list.map(c => {
     const s = S.schedules.find(x=>x.id===c.scheduleId);
     return `<tr class="click" data-sid="${c.scheduleId}"><td style="white-space:nowrap">${stamp(c.at)} ${isNew(c.at)?`<span class="newtag">NEW</span>`:""}</td>
-      <td>${s?esc(barText(s)):"(삭제된 일정)"}</td><td>${esc(c.authorName)}</td><td>${esc(c.text.length>60?c.text.slice(0,60)+"…":c.text)}</td></tr>`;
+      <td>${s?esc(barText(s)):"(삭제된 일정)"}</td><td>${esc(c.authorName)}</td><td>${isPriv(c)?`<span class="privtag">🔒 비공개</span> `:""}${esc(c.text.length>60?c.text.slice(0,60)+"…":c.text)}</td></tr>`;
   }).join("");
   modal(`<h3>최근 댓글</h3>
     <table class="list"><thead><tr><th>시각</th><th>일정</th><th>작성자</th><th>내용</th></tr></thead>
@@ -874,7 +891,7 @@ function onUser(user, err){
     return;
   }
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
-  $("#whoLabel").textContent = isAdmin() ? "우리팀 (관리자)" : `${agencyOf(user.agency).name} (조회 · 댓글)`;
+  $("#whoLabel").textContent = isAdmin() ? "우리팀 (관리자)" : isStaff() ? "SL 시험팀 (조회 · 댓글)" : `${agencyOf(user.agency).name} (조회 · 댓글)`;
   document.querySelectorAll(".admin-only").forEach(el => el.classList.toggle("hidden", !isAdmin()));
   $("#workerWrap").classList.toggle("hidden", !isAdmin());
   const myName = (CONFIG.USER_NAMES||{})[(user.id||"").toLowerCase()];
@@ -891,6 +908,11 @@ function onUser(user, err){
 function onData(d){
   S.schedules = d.schedules; S.blocks = d.blocks; S.history = d.history; S.comments = d.comments || [];
   // 관리자 접속 시 보관기간 지난 휴지통 항목 정리
+  if(isAdmin()){
+    // 공개/비공개 도입 전 댓글은 공개로 표시 (기관·시험팀 조회 조건에 맞추기 위함)
+    S.visFixed = S.visFixed || new Set();
+    S.comments.filter(c=>!c.visibility && !S.visFixed.has(c.id)).forEach(c=>{ S.visFixed.add(c.id); S.store.setCommentVis(c.id,"public").catch(()=>{}); });
+  }
   if(isAdmin() && !S.purged){
     S.purged = true;
     const limit = Date.now() - CONFIG.TRASH_DAYS*864e5;
