@@ -189,6 +189,7 @@ table.list tr.click:hover td{background:#f7f9fc}
       <button class="btn ghost sm admin-only" id="btnHistory">변경 이력</button>
       <button class="btn ghost sm" id="btnComments">댓글</button>
       <button class="btn ghost sm" id="btnPrint">인쇄 / PDF</button>
+      <button class="btn ghost sm" id="btnIcs" title="담당 일정을 아웃룩 달력 파일(.ics)로 받기">📅 내 일정 아웃룩에 추가</button>
       <button class="btn ghost sm" id="btnPw">비밀번호 변경</button>
       <button class="btn ghost sm" id="btnLogout">로그아웃</button>
     </div>
@@ -276,6 +277,8 @@ const CONFIG = {
 
   TYPES: ["신규", "EXT"],
   TRASH_DAYS: 7,
+  // 아웃룩 일정 파일 알림: 시작일 며칠 전 (아웃룩 데스크톱은 첫 번째 값만 쓰는 경우가 있음)
+  ICS_ALARM_DAYS: [3, 1],
 };
 
 // 공휴일 (빨간 날 표시용, 대체공휴일 포함 — 필요 시 수정)
@@ -610,10 +613,12 @@ function openDetail(id){
       </div>
       <div class="mfoot">
         <button class="btn ghost" data-close>닫기</button>
+        <button class="btn ghost left" id="dIcs">📅 이 일정 아웃룩에 추가</button>
         ${isAdmin()?`<button class="btn" id="dEdit">일정 수정</button>`:""}
       </div>`);
     $("[data-close]").onclick = closeModal;
     if(isAdmin()) $("#dEdit").onclick = () => openEdit(id);
+    $("#dIcs").onclick = () => downloadIcs([s], `EU-cert_${(s.project+"_"+(s.part||"")).replace(/[^A-Za-z0-9_-]+/g,"-").replace(/^-+|-+$/g,"") || "schedule"}_${s.start.replace(/-/g,"")}.ics`);
     $("#cSend").onclick = async () => {
       const name = $("#cName").value.trim(), text = $("#cText").value.trim();
       if(!name){ $("#cErr").textContent = "이름을 입력하세요."; return; }
@@ -642,6 +647,49 @@ function openDetail(id){
     S.redraw = () => draw($("#cText") ? $("#cText").value : "");
   };
   draw();
+}
+
+/* ---------- 아웃룩 일정 파일(.ics) 내보내기 ---------- */
+function icsEsc(t){ return String(t??"").replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n"); }
+function icsFold(line){
+  // 75바이트(UTF-8)마다 줄바꿈 + 공백 (iCalendar 규칙, 한글이 잘리지 않게 글자 단위로 자름)
+  const enc = new TextEncoder(); let out = "", cur = "", n = 0;
+  for(const ch of line){ const b = enc.encode(ch).length; if(n + b > 73){ out += cur + "\r\n "; cur = ""; n = 1; } cur += ch; n += b; }
+  return out + cur;
+}
+function icsDate(ds){ return ds.replace(/-/g,""); }
+function buildIcs(list){
+  const stamp = new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
+  const site = location.origin + location.pathname;
+  const L = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//SL Homologation//EU Cert Schedule//KO","CALSCALE:GREGORIAN","METHOD:PUBLISH"];
+  list.forEach(s => {
+    const seq = s.updatedAt ? Math.max(0, Math.floor((Date.parse(s.updatedAt) - Date.UTC(2026,0,1)) / 1000)) : 0;
+    const desc = [`인증기관: ${agencyOf(s.agency).name}`, `담당자: ${s.owner||"-"}`, `구분: ${s.type||"-"}`, `기간: ${s.start} ~ ${s.end}`,
+                  s.note ? `비고: ${s.note}` : "", `사이트: ${site}`].filter(Boolean).join("\n");
+    L.push("BEGIN:VEVENT", `UID:${s.id}@sl-eu-cert-schedule`, `DTSTAMP:${stamp}`, `SEQUENCE:${seq}`,
+      `DTSTART;VALUE=DATE:${icsDate(s.start)}`, `DTEND;VALUE=DATE:${icsDate(fmt(addDays(parse(s.end),1)))}`,
+      `SUMMARY:${icsEsc(`[유럽인증] ${barText(s)} (${s.type||""})`)}`, `DESCRIPTION:${icsEsc(desc)}`, "TRANSP:TRANSPARENT");
+    CONFIG.ICS_ALARM_DAYS.forEach(d => L.push("BEGIN:VALARM","ACTION:DISPLAY",`DESCRIPTION:${icsEsc(`유럽인증 일정 ${d}일 전: ${barText(s)}`)}`,`TRIGGER:-P${d}D`,"END:VALARM"));
+    L.push("END:VEVENT");
+  });
+  L.push("END:VCALENDAR");
+  return L.map(icsFold).join("\r\n") + "\r\n";
+}
+function downloadIcs(list, filename){
+  const blob = new Blob([buildIcs(list)], { type:"text/calendar;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+}
+function exportMyIcs(){
+  const today = fmt(new Date());
+  const mine = isAdmin();
+  const list = S.schedules.filter(s => !s.deleted && s.end >= today && (!mine || s.owner===S.worker))
+                          .sort((a,b)=>a.start.localeCompare(b.start));
+  const who = mine ? S.worker : (isStaff() ? "시험팀" : agencyOf(S.user.agency).name);
+  if(!list.length){ alert(mine ? `${S.worker} 님이 담당자인 앞으로의 일정이 없습니다.\n(상단 작업자를 바꾸면 다른 담당자 일정을 받을 수 있습니다.)` : "앞으로의 일정이 없습니다."); return; }
+  if(!confirm(`${who} 일정 ${list.length}건을 아웃룩 파일로 받습니다.\n받은 파일을 더블클릭하면 아웃룩 달력에 추가됩니다.\n(일정이 바뀌면 다시 받아서 열면 덮어쓰기 됩니다.)`)) return;
+  const tag = mine ? ((Object.entries(CONFIG.USER_NAMES||{}).find(([k,v])=>v===S.worker)||[])[0] || "my") : (isStaff() ? "test-team" : String(S.user.agency||"").toLowerCase());
+  downloadIcs(list, `EU-cert_${tag}_${today.replace(/-/g,"")}.ics`);
 }
 
 function openComments(){
@@ -806,6 +854,7 @@ $("#btnHistory").onclick = openHistory;
 $("#btnComments").onclick = openComments;
 $("#btnPrint").onclick   = () => window.print();
 $("#btnLogout").onclick  = () => S.store.logout();
+$("#btnIcs").onclick = exportMyIcs;
 $("#btnPw").onclick = () => {
   modal(`<h3>비밀번호 변경</h3>
     <form id="pwf" class="form" onsubmit="return false">
